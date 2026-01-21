@@ -1,0 +1,15 @@
+# .gitignore
+
+# trash
+ShadowGram/.vs/
+ShadowGram/out/
+
+# secret
+ShadowGram/MessengerServer/src/config.json
+
+# showing code
+project_output.txt
+ShadowGram/collect_code.ps1
+
+# client
+ShadowGram/MessengerClient/

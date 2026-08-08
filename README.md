@@ -16,23 +16,28 @@ This Project(learning) is primarily focused on:
 
 
 **Project Structure**:
-ShadowGram/
-   MessengerServer/ # C++ backend server
-     include/
-       Entities # Core domain models
-       Repositories # Database access layer
-       Services # Business logic
-       Network # TCP server & sessions
-     src/
-
-     CMakeLists.txt
-
-   MessengerClient/ # Client application (planned, Java)
-
-   db_init.sql # PostgreSQL schema
-   CMakeLists.txt
-   CMakePresets.json
-   vcpkg.json
+ShadowGram
+│   CMakeLists.txt
+│   CMakePresets.json
+│   collect_code.ps1
+│   db_init.sql
+│   vcpkg.json
+│
+├───MessengerClient (planned, Java)
+│
+└───MessengerServer
+    │   CMakeLists.txt
+    │
+    ├───include
+    │   ├───Contracts
+    │   ├───Entities
+    │   ├───Network
+    │   ├───Repositories
+    │   ├───Services
+    │   │   └───Authorization
+    │   └───Utils
+    │
+    └───src
 
 
 The Server follows a **layered architecture**:

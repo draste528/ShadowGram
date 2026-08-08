@@ -10,6 +10,7 @@ ShadowGram/MessengerServer/src/config.json
 # showing code
 project_output.txt
 ShadowGram/collect_code.ps1
+ShadowGramPrompt.txt
 
 # client
 ShadowGram/MessengerClient/

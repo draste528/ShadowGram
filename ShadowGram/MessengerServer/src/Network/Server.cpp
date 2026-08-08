@@ -28,7 +28,7 @@ namespace Network
 			while (true) {
 				asio::ip::tcp::socket socket = co_await m_acceptor.async_accept(asio::make_strand(m_ioContext));
 				std::cout << "[Server] New client connected: " << socket.remote_endpoint() << std::endl;
-				asio::co_spawn(m_ioContext, Session::client_session(std::move(socket)), asio::detached);
+				asio::co_spawn(m_ioContext, Session::client_session(std::move(socket), m_authService), asio::detached);
 			}
 		}
 		catch (const std::exception& e) {

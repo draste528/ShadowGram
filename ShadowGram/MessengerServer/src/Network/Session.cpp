@@ -12,7 +12,7 @@ using json = nlohmann::json;
 
 namespace Network
 {
-	asio::awaitable<void> Session::client_session(asio::ip::tcp::socket socket)
+	asio::awaitable<void> Session::client_session(asio::ip::tcp::socket socket, std::shared_ptr<Contracts::IAuthService> authService)
 	{
 		try {
 			// +++ TEMPORARY +++ (then will call AuthService::VerifyToken)
@@ -101,6 +101,38 @@ namespace Network
 							asio::use_awaitable);
 						co_await asio::async_write(socket, asio::buffer(responseStr), 
 							asio::use_awaitable);
+					}
+					else if (action == "register") {
+						std::string username = request.value("username", "");
+						std::string password = request.value("password", "");
+						std::string first_name = request.value("first_name", "");
+
+						// Вызываем логику AuthService
+						auto authResult = authService->RegisterUser(username, password, first_name);
+
+						// Формируем ответ
+						json response = {
+							{"type", "register_response"}
+						};
+
+						if (authResult.success) {
+							response["status"] = "ok";
+							response["user_id"] = uuids::to_string(authResult.user_id.value());
+						}
+						else {
+							response["status"] = "error";
+							response["message"] = authResult.error_message;
+						}
+
+						// Отправка ответа клиенту
+						std::string responseStr = response.dump();
+						uint32_t responseNetworkLength = asio::detail::socket_ops::host_to_network_long(
+							static_cast<uint32_t>(responseStr.size())
+						);
+
+						co_await asio::async_write(socket, asio::buffer(&responseNetworkLength, 4), asio::use_awaitable);
+						co_await asio::async_write(socket, asio::buffer(responseStr), asio::use_awaitable);
+
 					}
 				}
 				catch (const nlohmann::json::exception& e)

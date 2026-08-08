@@ -19,7 +19,7 @@ namespace Services
 		Contracts::AuthResult RegisterUser(
 			const std::string& username,
 			const std::string& password,
-			const std::string& furst_name) override;
+			const std::string& first_name) override;
 
 		Contracts::AuthResult LoginUser(
 			const std::string& username,

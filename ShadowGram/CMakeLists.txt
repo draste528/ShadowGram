@@ -20,11 +20,11 @@ find_package(nlohmann_json CONFIG REQUIRED)
 add_subdirectory(MessengerServer)
 
 # 3. Настраиваем временный клиент
-add_executable(MessengerClient MessengerClient/src/main.cpp)
+#add_executable(MessengerClient MessengerClient/src/main.cpp)
 
 # Указываем правильные имена таргетов из vcpkg
 # Для asio это обычно asio::asio (как подсказал лог выше)
-target_link_libraries(MessengerClient PRIVATE 
-    asio::asio 
-    nlohmann_json::nlohmann_json
-)
+#target_link_libraries(MessengerClient PRIVATE 
+#    asio::asio 
+#    nlohmann_json::nlohmann_json
+#)

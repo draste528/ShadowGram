@@ -2,6 +2,8 @@
 #include <asio.hpp>
 #include <stduuid/uuid.h>
 #include <random>
+#include "Contracts/IAuthService.h"
+#include <memory>
 
 namespace Network
 {
@@ -17,6 +19,6 @@ namespace Network
 		}
 
 	public:
-		static asio::awaitable<void> client_session(asio::ip::tcp::socket socket);
+		static asio::awaitable<void> client_session(asio::ip::tcp::socket socket, std::shared_ptr<Contracts::IAuthService> authService);
 	};
 }

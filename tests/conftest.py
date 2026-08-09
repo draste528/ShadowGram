@@ -221,6 +221,32 @@ def register(client, username):
 
 
 @pytest.fixture
+def account(connect, make_username):
+    """Factory creating a real account, returning (username, password, user_id).
+
+    Registration runs on its own connection because `register` does not
+    authenticate anything (see docs/FINDINGS.md, F-02): a caller that wants an
+    identity has to send `login`, which is exactly what these tests exercise.
+    """
+
+    def _make(password: str = "correct horse") -> tuple[str, str, str]:
+        name = make_username()
+        registrar = connect()
+        response = registrar.request(
+            {
+                "type": "register",
+                "username": name,
+                "password": password,
+                "first_name": "Test",
+            }
+        )
+        assert response["status"] == "ok", f"could not create the account: {response}"
+        return name, password, response["user_id"]
+
+    return _make
+
+
+@pytest.fixture
 def existing_chat(db):
     """Insert a chat row directly and return its uuid.
 

@@ -142,6 +142,36 @@ namespace Network
 						co_await asio::async_write(socket, asio::buffer(responseStr), asio::use_awaitable);
 
 					}
+					else if (action == "login") {
+						std::string username = request.value("username", "");
+						std::string password = request.value("password", "");
+
+						auto authResult = authService->LoginUser(username, password);
+
+						json response = {
+							{"type", "login_response"}
+						};
+
+						if (authResult.success) {
+							// The identity is bound to this connection; a later successful
+							// login replaces it, a failed one leaves it untouched.
+							authenticatedUserId = authResult.user_id;
+							response["status"] = "ok";
+							response["user_id"] = uuids::to_string(authResult.user_id.value());
+						}
+						else {
+							response["status"] = "error";
+							response["message"] = authResult.error_message;
+						}
+
+						std::string responseStr = response.dump();
+						uint32_t responseNetworkLength = asio::detail::socket_ops::host_to_network_long(
+							static_cast<uint32_t>(responseStr.size())
+						);
+
+						co_await asio::async_write(socket, asio::buffer(&responseNetworkLength, 4), asio::use_awaitable);
+						co_await asio::async_write(socket, asio::buffer(responseStr), asio::use_awaitable);
+					}
 				}
 				catch (const nlohmann::json::exception& e)
 				{

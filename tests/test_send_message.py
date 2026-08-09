@@ -127,12 +127,15 @@ def test_error_response_still_carries_a_message_id_that_exists_nowhere(client):
     assert uuid.UUID(response["message_id"])
 
 
+def _login(client, name: str, password: str) -> dict:
+    return client.request({"type": "login", "username": name, "password": password})
+
+
 @pytest.mark.db
-@pytest.mark.xfail(
-    reason="F-01: sender_id is a per-connection random UUID that is not a real "
-           "user, so the INSERT always violates messages_sender_id_fkey",
-)
-def test_message_should_be_persisted(client, db, existing_chat):
+def test_message_should_be_persisted(client, db, account, existing_chat):
+    name, password, _ = account()
+    assert _login(client, name, password)["status"] == "ok"
+
     response = client.request(_send(existing_chat, content="persist me"))
 
     assert response["status"] == "ok"
@@ -146,13 +149,9 @@ def test_message_should_be_persisted(client, db, existing_chat):
 
 
 @pytest.mark.db
-@pytest.mark.xfail(
-    reason="F-02: the connection has no identity; registering on it does not "
-           "make the caller the sender of its messages",
-)
-def test_registering_first_should_make_that_user_the_sender(client, db, register, existing_chat):
-    _, registration = register()
-    assert registration["status"] == "ok"
+def test_logging_in_first_makes_that_user_the_sender(client, db, account, existing_chat):
+    name, password, user_id = account()
+    assert _login(client, name, password)["status"] == "ok"
 
     response = client.request(_send(existing_chat, content="from a real user"))
 
@@ -160,7 +159,54 @@ def test_registering_first_should_make_that_user_the_sender(client, db, register
     sender = db.execute(
         "SELECT sender_id FROM messages WHERE message_id = %s", (response["message_id"],)
     ).fetchone()[0]
-    assert str(sender) == registration["user_id"]
+    assert str(sender) == user_id
+
+
+@pytest.mark.db
+def test_logging_in_again_changes_who_the_sender_is(client, db, account, existing_chat):
+    first_name, first_password, _ = account()
+    second_name, second_password, second_id = account()
+    assert _login(client, first_name, first_password)["status"] == "ok"
+    assert _login(client, second_name, second_password)["status"] == "ok"
+
+    response = client.request(_send(existing_chat, content="from the second user"))
+
+    assert response["status"] == "ok"
+    sender = db.execute(
+        "SELECT sender_id FROM messages WHERE message_id = %s", (response["message_id"],)
+    ).fetchone()[0]
+    assert str(sender) == second_id
+
+
+@pytest.mark.db
+def test_a_refused_login_leaves_an_established_identity_alone(
+    client, db, account, existing_chat
+):
+    """A typed-wrong password must not silently log the connection out."""
+    name, password, user_id = account()
+    assert _login(client, name, password)["status"] == "ok"
+
+    assert _login(client, name, password + "-wrong")["status"] == "error"
+
+    response = client.request(_send(existing_chat, content="still me"))
+    assert response["status"] == "ok"
+    sender = db.execute(
+        "SELECT sender_id FROM messages WHERE message_id = %s", (response["message_id"],)
+    ).fetchone()[0]
+    assert str(sender) == user_id
+
+
+@pytest.mark.db
+def test_an_identity_does_not_leak_to_another_connection(connect, account, existing_chat):
+    """Identity is bound to the connection that logged in, nothing wider."""
+    name, password, _ = account()
+    authenticated = connect()
+    assert _login(authenticated, name, password)["status"] == "ok"
+    assert authenticated.request(_send(existing_chat, content="mine"))["status"] == "ok"
+
+    bystander = connect()
+
+    assert bystander.request(_send(existing_chat, content="not mine"))["status"] == "error"
 
 
 @pytest.mark.db

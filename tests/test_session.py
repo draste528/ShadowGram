@@ -38,7 +38,7 @@ def test_one_connection_handles_many_sequential_requests(client, make_username):
 @pytest.mark.parametrize(
     "action",
     [
-        pytest.param("login", id="login"),
+        # `login` used to belong here; it is a real action since F-02.
         pytest.param("logout", id="logout"),
         pytest.param("get_messages", id="get_messages"),
         pytest.param("create_chat", id="create_chat"),
@@ -59,10 +59,6 @@ def test_unsupported_action_is_answered_with_silence(connect, action, username):
     client.assert_silent(within=1.5)
 
 
-@pytest.mark.xfail(
-    reason="F-02: there is no `login` action on the wire; AuthService::LoginUser "
-           "is never reachable from a client",
-)
 def test_login_is_supported(client, register):
     name, registration = register(password="s3cret")
     assert registration["status"] == "ok"
@@ -70,6 +66,80 @@ def test_login_is_supported(client, register):
     response = client.request({"type": "login", "username": name, "password": "s3cret"})
 
     assert response["status"] == "ok"
+
+
+def test_login_returns_the_id_of_the_account_that_was_registered(client, account):
+    name, password, user_id = account()
+
+    response = client.request({"type": "login", "username": name, "password": password})
+
+    assert response["type"] == "login_response"
+    assert response["status"] == "ok"
+    assert response["user_id"] == user_id
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        pytest.param("wrong-password", id="wrong-password"),
+        pytest.param("unknown-user", id="unknown-user"),
+    ],
+)
+def test_login_is_refused_without_valid_credentials(client, account, make_username, scenario):
+    """Both refusals carry the same message, so login cannot be used to find out
+    which usernames exist (`register` still can — see F-17)."""
+    name, password, _ = account()
+    if scenario == "wrong-password":
+        username, attempt = name, password + "-wrong"
+    else:
+        username, attempt = make_username(), password
+
+    response = client.request({"type": "login", "username": username, "password": attempt})
+
+    assert response["type"] == "login_response"
+    assert response["status"] == "error"
+    assert response["message"] == "Invalid username or password"
+    assert "user_id" not in response
+
+
+def test_logging_in_twice_on_one_connection_rebinds_the_identity(client, account):
+    first_name, first_password, _ = account()
+    second_name, second_password, second_id = account()
+
+    first = client.request(
+        {"type": "login", "username": first_name, "password": first_password}
+    )
+    second = client.request(
+        {"type": "login", "username": second_name, "password": second_password}
+    )
+
+    assert first["status"] == "ok"
+    assert second["status"] == "ok"
+    assert second["user_id"] == second_id
+
+
+def test_logging_in_as_the_same_user_twice_is_accepted(client, account):
+    name, password, user_id = account()
+
+    first = client.request({"type": "login", "username": name, "password": password})
+    second = client.request({"type": "login", "username": name, "password": password})
+
+    assert [first["status"], second["status"]] == ["ok", "ok"]
+    assert first["user_id"] == second["user_id"] == user_id
+
+
+def test_registering_does_not_log_the_connection_in(client, make_username):
+    """`register` creates the account and nothing else; the caller still has to
+    send `login` to get an identity on the connection."""
+    name = make_username()
+    registration = client.request(
+        {"type": "register", "username": name, "password": "pw", "first_name": "Test"}
+    )
+
+    assert registration["status"] == "ok"
+    assert registration["type"] == "register_response"
+    # a register_response carries no session state, only the created id
+    assert set(registration) == {"type", "status", "user_id"}
 
 
 @pytest.mark.xfail(

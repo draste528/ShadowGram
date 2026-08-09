@@ -108,13 +108,22 @@ uint32 big-endian body length | body length bytes of UTF-8 JSON
 * bodies larger than 1 MiB make the server close the connection without reading
   them; exactly 1 MiB is accepted
 * there is no request id, so responses are matched to requests by order
-* requests: `{"type":"register","username","password","first_name"}` and
+* requests: `{"type":"register","username","password","first_name"}`,
+  `{"type":"login","username","password"}` (F-02) and
   `{"type":"send_message","chat_id","content","nonce"}`
 * responses: `{"type":"register_response","status":"ok","user_id"}`,
   `{"type":"register_response","status":"error","message"}`,
+  `{"type":"login_response","status":"ok","user_id"}`,
+  `{"type":"login_response","status":"error","message"}`,
   `{"type":"response","status":"ok"|"error","message_id"}`
-* anything else — unknown `type`, malformed JSON, wrongly typed fields, an
-  unparseable `chat_id` — produces **no response at all** (F-04)
+* `send_message` requires a prior `login` on the same connection; without one it
+  is refused before it reaches the database (F-01/F-02)
+* anything else produces exactly one error frame,
+  `{"type":"error_response","status":"error","code","message"}` (F-04). `code`
+  is stable and is one of `invalid_json` (body is not JSON), `invalid_request`
+  (body is JSON but not an object), `invalid_field` (a field has the wrong JSON
+  type), `unknown_action` (unknown or missing `type`) or `invalid_chat_id`.
+  `message` is prose for humans and nothing asserts it
 
 ## 6. Conventions
 
@@ -132,6 +141,29 @@ uint32 big-endian body length | body length bytes of UTF-8 JSON
 
 Most findings therefore have a pair of tests: one describing the present, one
 describing the intent.
+
+### Collapsing a pair when a finding is fixed
+
+When the two members of a pair describe the *same* request, fixing the finding
+makes them redundant and they are merged into one test named after the intended
+behaviour. The richer member survives — usually the parameterized one — and the
+other's case is folded in as an extra parameter rather than deleted.
+
+That happened to four xfail tests when **F-04** was fixed. Each was a
+single-case duplicate of a characterization test covering the identical
+request, so each became one parameter of the test that replaced the pair:
+
+| Deleted xfail test | Its case | Absorbed into | As parameter |
+|---|---|---|---|
+| `test_framing.py::test_malformed_body_should_be_answered_with_an_error_frame` | `{not json` | `test_malformed_body_is_answered_with_an_error_frame` | `broken-object` |
+| `test_session.py::test_unknown_action_should_be_answered_with_an_error` | `definitely_not_an_action` | `test_unsupported_action_is_answered_with_an_error` | `nonsense` |
+| `test_register.py::test_non_string_username_should_be_answered_with_an_error` | `username: 12345` | `test_wrongly_typed_field_is_answered_with_an_error` | `username-number` |
+| `test_send_message.py::test_unparseable_chat_id_should_be_answered_with_an_error` | `not-a-uuid` | `test_unparseable_chat_id_is_answered_with_an_error` | `garbage` |
+
+The characterization tests those four paired with were not deleted either: they
+are the tests listed in the third column, rewritten to assert the error frame
+and its `code` instead of the silence they used to pin. No scenario asserted
+before F-04 is unasserted after it.
 
 Everything the suite writes uses the `sgtest_` username prefix, which is what
 makes the optional `SHADOWGRAM_CLEANUP=1` step safe.

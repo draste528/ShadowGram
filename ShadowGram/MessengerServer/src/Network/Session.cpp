@@ -15,10 +15,8 @@ namespace Network
 	asio::awaitable<void> Session::client_session(asio::ip::tcp::socket socket, std::shared_ptr<Contracts::IAuthService> authService)
 	{
 		try {
-			// +++ TEMPORARY +++ (then will call AuthService::VerifyToken)
-
-			// +++ UUID GENERATION 
-			auto authenticatedUserId =  Session::generate_uuid(); // also used for msg uuid
+			// No identity until the connection has authenticated (see F-02 login).
+			std::optional<uuids::uuid> authenticatedUserId;
 
 			const std::string dbConnectionStr = Services::ConfigManager::getInstance().getDBConnectionString();
 			auto dbConnection = std::make_shared<pqxx::connection>(dbConnectionStr);
@@ -82,8 +80,18 @@ namespace Network
 						std::string nonceStr = request.value("nonce", "");
 						msg.encryption_nonce.assign(nonceStr.begin(), nonceStr.end());
 
-						// Saving to DB
-						bool isSaved = messageRepository.SaveMessage(msg);
+						// An unauthenticated connection has no sender to store, so the
+						// request is refused before it can reach the database.
+						bool isSaved = false;
+						if (msg.sender_id.has_value())
+						{
+							// Saving to DB
+							isSaved = messageRepository.SaveMessage(msg);
+						}
+						else
+						{
+							std::cerr << "[Auth] send_message on an unauthenticated connection refused." << std::endl;
+						}
 
 						// ===== Response to Sender
 						json response = {

@@ -11,6 +11,7 @@ next to it, state what the action is supposed to do.
 
 from __future__ import annotations
 
+import time
 import uuid
 
 import pytest
@@ -22,6 +23,27 @@ def _send(chat_id: str, content: str = "hello world", **extra) -> dict:
     payload = {"type": "send_message", "chat_id": chat_id, "content": content, "nonce": "n0nce"}
     payload.update(extra)
     return payload
+
+
+def _rollbacks(db) -> int:
+    """Transactions this database has rolled back since the counter was reset."""
+    return int(
+        db.execute(
+            "SELECT xact_rollback FROM pg_stat_database WHERE datname = current_database()"
+        ).fetchone()[0]
+    )
+
+
+def _rollback_delta(db, before: int, within: float = 4.0) -> int:
+    """Rollbacks since ``before``, allowing for the statistics flush delay."""
+    deadline = time.monotonic() + within
+    delta = 0
+    while time.monotonic() < deadline:
+        delta = _rollbacks(db) - before
+        if delta > 0:
+            return delta
+        time.sleep(0.25)
+    return delta
 
 
 @pytest.mark.characterization
@@ -49,6 +71,52 @@ def test_nothing_is_written_to_the_messages_table(client, db, existing_chat):
 
     after = db.execute("SELECT count(*) FROM messages").fetchone()[0]
     assert after == before
+
+
+@pytest.mark.db
+def test_unauthenticated_send_message_is_refused(client, existing_chat):
+    """A connection that has not logged in may not post into a real chat.
+
+    This passes against the pre-F-01 server too, for the wrong reason (the
+    foreign key rejects the invented sender).  Its job starts with F-02: once a
+    logged-in connection can post successfully, this pins that an anonymous one
+    still cannot.
+    """
+    response = client.request(_send(existing_chat))
+
+    assert response["type"] == "response"
+    assert response["status"] == "error"
+
+
+@pytest.mark.slow
+@pytest.mark.db
+def test_unauthenticated_send_message_never_reaches_the_database(connect, db, existing_chat):
+    """The refusal must happen in the session, not in PostgreSQL.
+
+    Before F-01 the server built the INSERT with a sender_id that was never a
+    real user; PostgreSQL rejected it on messages_sender_id_fkey, which shows up
+    as a rolled-back transaction.  After F-01 the request never gets that far,
+    so the rollback counter does not move.  This is the assertion that tells the
+    two binaries apart.
+
+    The connection is closed before the counter is read: PostgreSQL only flushes
+    a backend's pending statistics when that backend exits, and the server holds
+    one backend per client socket (F-11).
+
+    Caveat: ``pg_stat_database.xact_rollback`` counts the whole database, not
+    this connection, so anything else rolling back a transaction against
+    shadowgram_test while this runs — an open DBeaver session, a second copy of
+    the suite — makes it report a failure that is not the server's fault.  Run
+    it against a database nobody else is using.  It is marked ``slow`` because
+    the passing path always waits out the full statistics-flush poll.
+    """
+    before = _rollbacks(db)
+
+    caller = connect()
+    assert caller.request(_send(existing_chat))["status"] == "error"
+    caller.close()
+
+    assert _rollback_delta(db, before) == 0
 
 
 @pytest.mark.characterization

@@ -11,6 +11,8 @@ import uuid
 
 import pytest
 
+from shadowgram_client import assert_error_frame
+
 pytestmark = pytest.mark.usefixtures("server")
 
 
@@ -34,7 +36,6 @@ def test_one_connection_handles_many_sequential_requests(client, make_username):
     assert len(ids) == 5
 
 
-@pytest.mark.characterization
 @pytest.mark.parametrize(
     "action",
     [
@@ -42,13 +43,15 @@ def test_one_connection_handles_many_sequential_requests(client, make_username):
         pytest.param("logout", id="logout"),
         pytest.param("get_messages", id="get_messages"),
         pytest.param("create_chat", id="create_chat"),
+        pytest.param("definitely_not_an_action", id="nonsense"),
         pytest.param("", id="empty-type"),
         pytest.param(None, id="no-type-field"),
     ],
 )
-def test_unsupported_action_is_answered_with_silence(connect, action, username):
-    """Only `register` and `send_message` exist; everything else falls through
-    the if/else chain and the loop simply waits for the next frame."""
+def test_unsupported_action_is_answered_with_an_error(connect, action, username):
+    """Replaces the pair that pinned F-04 for unknown actions: the
+    characterization test asserting silence and the xfail asserting an error.
+    A missing `type` defaults to "unknown" and lands in the same branch."""
     client = connect()
     payload = {"username": username, "password": "pw"}
     if action is not None:
@@ -56,7 +59,7 @@ def test_unsupported_action_is_answered_with_silence(connect, action, username):
 
     client.send_json(payload)
 
-    client.assert_silent(within=1.5)
+    assert_error_frame(client.read_json(), "unknown_action")
 
 
 def test_login_is_supported(client, register):
@@ -142,25 +145,20 @@ def test_registering_does_not_log_the_connection_in(client, make_username):
     assert set(registration) == {"type", "status", "user_id"}
 
 
-@pytest.mark.xfail(
-    reason="F-04: an unknown action is ignored instead of being reported",
-)
-def test_unknown_action_should_be_answered_with_an_error(client):
-    response = client.request({"type": "definitely_not_an_action"})
-
-    assert response["status"] == "error"
-
-
 def test_connection_survives_corrupt_json_between_valid_requests(client, make_username):
     assert client.request(_register_payload(make_username()))["status"] == "ok"
 
     client.send_frame(b"{ this is not json")
+    # since F-04 the rejection produces a frame of its own, which has to be
+    # consumed before the next response can be read
+    assert_error_frame(client.read_json(), "invalid_json")
 
     assert client.request(_register_payload(make_username()))["status"] == "ok"
 
 
 def test_connection_survives_a_zero_length_frame_between_valid_requests(client, make_username):
     client.send_frame(b"")
+    assert_error_frame(client.read_json(), "invalid_json")
 
     assert client.request(_register_payload(make_username()))["status"] == "ok"
 

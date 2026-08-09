@@ -12,6 +12,32 @@ using json = nlohmann::json;
 
 namespace Network
 {
+	// One rejected request produces exactly one error frame.  The code is the
+	// stable part a client may branch on; the message is for a human reading a
+	// log and never echoes anything the client sent.
+	namespace
+	{
+		json make_error(const char* code, const char* message)
+		{
+			return json{
+				{"type", "error_response"},
+				{"status", "error"},
+				{"code", code},
+				{"message", message}
+			};
+		}
+	}
+
+	asio::awaitable<void> Session::write_frame(asio::ip::tcp::socket& socket, std::string body)
+	{
+		uint32_t networkLength = asio::detail::socket_ops::host_to_network_long(
+			static_cast<uint32_t>(body.size())
+		);
+
+		co_await asio::async_write(socket, asio::buffer(&networkLength, 4), asio::use_awaitable);
+		co_await asio::async_write(socket, asio::buffer(body), asio::use_awaitable);
+	}
+
 	asio::awaitable<void> Session::client_session(asio::ip::tcp::socket socket, std::shared_ptr<Contracts::IAuthService> authService)
 	{
 		try {
@@ -47,9 +73,18 @@ namespace Network
 					asio::buffer(jsonPayload),
 					asio::use_awaitable);
 
+				std::optional<json> rejection;
+
 				try
 				{
 					auto request = nlohmann::json::parse(jsonPayload);
+
+					if (!request.is_object()) {
+						co_await Session::write_frame(socket, make_error(
+							"invalid_request", "Request body must be a JSON object.").dump());
+						continue;
+					}
+
 					std::string action = request.value("type", "unknown"); // if no type - then unkwown
 
 					if (action == "send_message") {
@@ -58,6 +93,8 @@ namespace Network
 						auto chatOptional = uuids::uuid::from_string(request.value("chat_id", ""));
 						if (!chatOptional.has_value()) {
 							std::cerr << "[Logic] Invalid Chat UUID." << std::endl;
+							co_await Session::write_frame(socket, make_error(
+								"invalid_chat_id", "chat_id is missing or not a UUID.").dump());
 							continue;
 						}
 
@@ -172,10 +209,31 @@ namespace Network
 						co_await asio::async_write(socket, asio::buffer(&responseNetworkLength, 4), asio::use_awaitable);
 						co_await asio::async_write(socket, asio::buffer(responseStr), asio::use_awaitable);
 					}
+					else {
+						co_await Session::write_frame(socket, make_error(
+							"unknown_action", "Unsupported value for the type field.").dump());
+					}
+				}
+				catch (const nlohmann::json::parse_error& e)
+				{
+					std::cerr << "[Security] Corrupt JSON: " << e.what() << std::endl;
+					rejection = make_error("invalid_json", "Request body is not valid JSON.");
+				}
+				catch (const nlohmann::json::type_error& e)
+				{
+					std::cerr << "[Security] Wrongly typed field: " << e.what() << std::endl;
+					rejection = make_error("invalid_field", "A field has the wrong JSON type.");
 				}
 				catch (const nlohmann::json::exception& e)
 				{
-					std::cerr << "[Security] Corrupt JSON ignored: " << e.what() << std::endl;
+					std::cerr << "[Security] Rejected request: " << e.what() << std::endl;
+					rejection = make_error("invalid_request", "Request could not be processed.");
+				}
+
+				// co_await cannot appear inside a handler, so the frame for an
+				// exception is written here instead.
+				if (rejection.has_value()) {
+					co_await Session::write_frame(socket, rejection->dump());
 				}
 
 			}

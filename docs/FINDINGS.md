@@ -35,6 +35,7 @@ Test names refer to files under `tests/`. Two kinds of tests appear:
 | [F-15](#f-15) | Low | Message metadata is invented or dropped (`content_type`, nonce) |
 | [F-16](#f-16) | Info | Missing protocol surface: no login, chat creation, or history |
 | [F-17](#f-17) | Info | Plaintext transport, and registration reveals whether a username exists |
+| [F-18](#f-18) | Low | Response framing is duplicated in every handler (won't fix) |
 
 ---
 
@@ -422,3 +423,45 @@ The tests reflect this: chats have to be inserted straight into the database
 * The database password lives in plain text in
   `MessengerServer/src/config.json`. That file is correctly listed in
   `.gitignore`, so it is not in the repository — keep it that way.
+
+---
+
+<a id="f-18"></a>
+## F-18 (Low) — Response framing is duplicated in every handler
+
+**Status: won't fix — the refactor is out of scope for this session.**
+
+**Observed.** Each of the three request handlers in `Session.cpp` — `send_message`,
+`register` and `login` — ends with its own copy of the same six lines:
+
+```cpp
+std::string responseStr = response.dump();
+uint32_t responseNetworkLength = asio::detail::socket_ops::host_to_network_long(
+    static_cast<uint32_t>(responseStr.size())
+);
+co_await asio::async_write(socket, asio::buffer(&responseNetworkLength, 4), asio::use_awaitable);
+co_await asio::async_write(socket, asio::buffer(responseStr), asio::use_awaitable);
+```
+
+Since F-04 a fourth copy of that logic exists as `Session::write_frame`, but it is
+used only by the error paths; the three success replies were left alone on
+purpose, to keep the F-04 change to the defect it was fixing.
+
+**Why.** Each branch of the dispatch chain was written independently, and there
+was no helper to reach for until F-04 introduced one.
+
+**Impact.** Not a runtime defect — the four copies agree today. It is a change
+amplifier: any alteration to the framing (adding the request id that F-16 needs,
+switching to a different length prefix, compressing bodies) has to be made in
+four places, and a handler added later can silently omit the reply altogether.
+That is exactly the shape of F-04, where a missing `else` meant no response was
+written at all.
+
+**Direction.** Route the three success replies through `Session::write_frame`
+and delete the inline copies. Mechanical, but it touches all three handlers, so
+it wants its own commit and its own test run rather than riding along with a
+defect fix.
+
+**Tests.** None — there is no externally observable behaviour to assert. The
+existing per-action response tests already cover that each handler replies
+correctly, which is what a later refactor would have to preserve.

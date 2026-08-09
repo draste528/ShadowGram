@@ -12,7 +12,7 @@ import time
 
 import pytest
 
-from shadowgram_client import HEADER, MAX_BODY
+from shadowgram_client import HEADER, MAX_BODY, assert_error_frame
 
 pytestmark = pytest.mark.usefixtures("server")
 
@@ -93,41 +93,35 @@ def test_oversized_frame_drops_a_previously_healthy_connection(client, username)
     client.assert_closed()
 
 
-@pytest.mark.characterization
-def test_zero_length_body_is_ignored_and_the_connection_survives(client, username):
-    """An empty body fails JSON parsing; the server logs and reads on."""
+def test_zero_length_body_is_rejected_and_the_connection_survives(client, username):
+    """An empty body fails JSON parsing, which is now reported rather than
+    swallowed; the connection stays usable afterwards."""
     client.send_frame(b"")
 
-    client.assert_silent(within=1.0)
+    assert_error_frame(client.read_json(), "invalid_json")
     assert client.request(_register_payload(username))["status"] == "ok"
 
 
-@pytest.mark.characterization
 @pytest.mark.parametrize(
-    "body",
+    "body, code",
     [
-        pytest.param(b"{not json", id="broken-object"),
-        pytest.param(b"[1, 2, 3]", id="array-instead-of-object"),
-        pytest.param(b"null", id="json-null"),
-        pytest.param(b"\xff\xfe\x00", id="not-utf8"),
+        pytest.param(b"{not json", "invalid_json", id="broken-object"),
+        pytest.param(b"[1, 2, 3]", "invalid_request", id="array-instead-of-object"),
+        pytest.param(b"null", "invalid_request", id="json-null"),
+        pytest.param(b'"a string"', "invalid_request", id="json-string"),
+        pytest.param(b"42", "invalid_request", id="json-number"),
+        pytest.param(b"\xff\xfe\x00", "invalid_json", id="not-utf8"),
     ],
 )
-def test_malformed_body_is_dropped_without_any_reply(connect, body):
+def test_malformed_body_is_answered_with_an_error_frame(connect, body, code):
+    """Replaces the pair that pinned F-04 from both sides: the characterization
+    test asserting silence and the xfail asserting an error.  Both scenarios are
+    the same request, so they collapse into this one, which additionally pins
+    which code each kind of malformed body produces."""
     client = connect()
     client.send_frame(body)
 
-    client.assert_silent(within=1.0)
-
-
-@pytest.mark.xfail(
-    reason="F-04: malformed input produces no reply at all, so a client cannot "
-           "tell a rejected request from a slow one",
-)
-def test_malformed_body_should_be_answered_with_an_error_frame(client):
-    client.send_frame(b"{not json")
-
-    response = client.read_json()
-    assert response["status"] == "error"
+    assert_error_frame(client.read_json(), code)
 
 
 def test_client_may_half_close_and_still_read_the_response(client, username):

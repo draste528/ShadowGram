@@ -11,6 +11,8 @@ import uuid
 
 import pytest
 
+from shadowgram_client import assert_error_frame
+
 pytestmark = pytest.mark.usefixtures("server")
 
 TOO_LONG_USERNAME = 51 * "u"   # users.username is VARCHAR(50)
@@ -144,30 +146,31 @@ def test_empty_password_should_be_rejected(register):
     assert response["status"] == "error"
 
 
-@pytest.mark.characterization
-def test_non_string_username_gets_no_response_at_all(client):
-    """json .value() throws type_error, which is swallowed by the catch block."""
-    client.send_json(
-        {"type": "register", "username": 12345, "password": "pw", "first_name": "x"}
-    )
-
-    client.assert_silent(within=1.5)
-
-
-@pytest.mark.xfail(
-    reason="F-04: a wrongly typed field silently drops the request instead of "
-           "producing an error response",
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        pytest.param("username", 12345, id="username-number"),
+        pytest.param("username", [], id="username-array"),
+        pytest.param("username", None, id="username-null"),
+        pytest.param("password", {"a": 1}, id="password-object"),
+        pytest.param("first_name", True, id="first-name-bool"),
+    ],
 )
-def test_non_string_username_should_be_answered_with_an_error(client):
-    client.send_json(
-        {"type": "register", "username": 12345, "password": "pw", "first_name": "x"}
-    )
+def test_wrongly_typed_field_is_answered_with_an_error(client, field, value):
+    """Replaces the pair that pinned F-04 for typed fields: the characterization
+    test asserting silence and the xfail asserting an error.  json .value()
+    raises type_error, which is now reported rather than swallowed."""
+    payload = {"type": "register", "username": "x", "password": "pw", "first_name": "x"}
+    payload[field] = value
 
-    assert client.read_json()["status"] == "error"
+    client.send_json(payload)
+
+    assert_error_frame(client.read_json(), "invalid_field")
 
 
 def test_connection_still_works_after_a_wrongly_typed_request(client, register):
     client.send_json({"type": "register", "username": [], "password": "pw"})
+    assert_error_frame(client.read_json(), "invalid_field")
 
     _, response = register()
     assert response["status"] == "ok"

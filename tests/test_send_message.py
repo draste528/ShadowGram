@@ -16,6 +16,8 @@ import uuid
 
 import pytest
 
+from shadowgram_client import assert_error_frame
+
 pytestmark = pytest.mark.usefixtures("server")
 
 
@@ -230,44 +232,59 @@ def test_message_ids_are_unique_per_request(client):
     assert first["message_id"] != second["message_id"]
 
 
-@pytest.mark.characterization
 @pytest.mark.parametrize(
     "chat_id",
     [
         pytest.param("not-a-uuid", id="garbage"),
         pytest.param("", id="empty"),
         pytest.param("123e4567-e89b-12d3-a456", id="truncated-uuid"),
+        pytest.param("123e4567e89b12d3a4564266141740zz", id="bad-hex"),
     ],
 )
-def test_unparseable_chat_id_gets_no_response(connect, chat_id):
+def test_unparseable_chat_id_is_answered_with_an_error(connect, chat_id):
+    """Replaces the pair that pinned F-04 for chat ids: the characterization
+    test asserting silence and the xfail asserting an error.  The handler used
+    to `continue` past these, leaving the client waiting forever."""
     client = connect()
     client.send_json(_send(chat_id))
 
-    client.assert_silent(within=1.5)
+    assert_error_frame(client.read_json(), "invalid_chat_id")
 
 
-@pytest.mark.characterization
-def test_missing_chat_id_gets_no_response(client):
+def test_missing_chat_id_is_answered_with_an_error(client):
     client.send_json({"type": "send_message", "content": "hi"})
 
-    client.assert_silent(within=1.5)
+    assert_error_frame(client.read_json(), "invalid_chat_id")
 
 
-@pytest.mark.xfail(
-    reason="F-04: an unparseable chat_id is skipped with `continue`, leaving the "
-           "client waiting for a reply that never comes",
-)
-def test_unparseable_chat_id_should_be_answered_with_an_error(client):
-    response = client.request(_send("not-a-uuid"))
-
-    assert response["status"] == "error"
-
-
-@pytest.mark.characterization
-def test_wrongly_typed_content_gets_no_response(client):
+def test_wrongly_typed_content_is_answered_with_an_error(client):
     client.send_json(_send(str(uuid.uuid4()), content=42))
 
-    client.assert_silent(within=1.5)
+    assert_error_frame(client.read_json(), "invalid_field")
+
+
+def test_the_connection_is_usable_after_each_kind_of_rejection(client, username):
+    """One rejection must not desynchronise the stream: every bad frame gets
+    exactly one reply, and a good request afterwards still works."""
+    client.send_frame(b"{not json")
+    assert_error_frame(client.read_json(), "invalid_json")
+
+    client.send_frame(b"[1,2,3]")
+    assert_error_frame(client.read_json(), "invalid_request")
+
+    client.send_json({"type": "nope"})
+    assert_error_frame(client.read_json(), "unknown_action")
+
+    client.send_json(_send("not-a-uuid"))
+    assert_error_frame(client.read_json(), "invalid_chat_id")
+
+    client.send_json({"type": "register", "username": 1})
+    assert_error_frame(client.read_json(), "invalid_field")
+
+    response = client.request(
+        {"type": "register", "username": username, "password": "pw", "first_name": "x"}
+    )
+    assert response["status"] == "ok"
 
 
 @pytest.mark.db

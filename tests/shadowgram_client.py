@@ -26,6 +26,21 @@ class ProtocolError(AssertionError):
     """Raised when the peer does not follow the length-prefixed framing."""
 
 
+def assert_error_frame(response: dict, code: str | None = None) -> dict:
+    """Assert ``response`` is the server's rejection frame, optionally its code.
+
+    Since F-04 every rejected request is answered with exactly one of these
+    instead of silence.  ``code`` is the stable part a client may branch on;
+    ``message`` is prose for a human and is not asserted anywhere.
+    """
+    assert response["type"] == "error_response", response
+    assert response["status"] == "error", response
+    assert "code" in response, response
+    if code is not None:
+        assert response["code"] == code, response
+    return response
+
+
 class Client:
     """A single TCP connection to the server.
 
